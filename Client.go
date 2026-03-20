@@ -6,16 +6,16 @@ import (
 	"fmt"
 	"math/rand"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 )
 
-type Player struct {
-	Name string `json:"name"`
-	HP   int    `json:"hp"`
+type Character struct {
+	Name     string `json:"name"`
+	HP       int    `json:"hp"`
+	Strength int    `json:"strength"`
 }
 
 type Message struct {
@@ -25,17 +25,17 @@ type Message struct {
 }
 
 type GameState struct {
-	Players  map[string]Player `json:"players"`
+	Players  map[string]Character `json:"players"`
 	Messages []Message            `json:"messages"`
 }
 
 var (
-	hero      Player
-	app       *tview.Application
-	pages     *tview.Pages
-	chatBox   *tview.TextView
-	worldBox  *tview.TextView
-	serverURL = "http://localhost:8080" 
+	hero        Character
+	app         *tview.Application
+	pages       *tview.Pages
+	chatView    *tview.TextView
+	playersList *tview.TextView
+	serverURL   = "http://localhost:8080" 
 )
 
 func networkLoop() {
@@ -46,20 +46,21 @@ func networkLoop() {
 			var gs GameState
 			if err := json.NewDecoder(resp.Body).Decode(&gs); err == nil {
 				app.QueueUpdateDraw(func() {
-					chatBox.Clear()
-					for _, m := range gs.Messages {
-						fmt.Fprintf(chatBox, "[gray]%s[-] [blue]%s:[-] %s\n", m.Time, m.Author, m.Text)
-					}
-					chatBox.ScrollToEnd()
-
-					worldBox.Clear()
-					fmt.Fprintln(worldBox, "[yellow]ИГРОКИ:[-]")
+					playersList.Clear()
+					fmt.Fprintln(playersList, "[yellow]ИГРОКИ:[-]")
 					for name, p := range gs.Players {
+						color := "white"
 						if name == hero.Name { 
+							color = "green"
 							hero.HP = p.HP 
 						}
-						fmt.Fprintf(worldBox, "• %s (HP: %d)\n", name, p.HP)
+						fmt.Fprintf(playersList, "[%s]• %s (HP: %d)[-]\n", color, name, p.HP)
 					}
+					chatView.Clear()
+					for _, m := range gs.Messages {
+						fmt.Fprintf(chatView, "[gray]%s[-] [blue]%s:[-] %s\n", m.Time, m.Author, m.Text)
+					}
+					chatView.ScrollToEnd()
 				})
 			}
 			resp.Body.Close()
@@ -68,70 +69,94 @@ func networkLoop() {
 	}
 }
 
-func sendMessage(text string) {
-	if text == "" { return }
-	if strings.HasPrefix(text, "/slap ") {
-		target := strings.TrimPrefix(text, "/slap ")
-		dmg := 10 + rand.Intn(10)
-		payload, _ := json.Marshal(map[string]interface{}{"Target": target, "Damage": dmg, "Attacker": hero.Name})
-		go http.Post(serverURL+"/attack", "application/json", bytes.NewBuffer(payload))
-		return
-	}
-	msg, _ := json.Marshal(Message{Author: hero.Name, Text: text})
-	go http.Post(serverURL+"/chat", "application/json", bytes.NewBuffer(msg))
+func pvpAttack(target string) {
+	if target == "" || target == hero.Name { return }
+	dmg := hero.Strength + rand.Intn(5)
+	payload, _ := json.Marshal(map[string]interface{}{
+		"Target": target, "Damage": dmg, "Attacker": hero.Name,
+	})
+	go http.Post(serverURL+"/attack", "application/json", bytes.NewBuffer(payload))
+}
+
+func showMenu() {
+	menuList := tview.NewList().
+		AddItem("В лес (PvE)", "Бой с мобом", '1', func() { startBattle() }).
+		AddItem("АТАКОВАТЬ ИГРОКА", "Введите ник для PvP", '2', func() { showPvPDialog() }).
+		AddItem("Выход", "", 'q', func() { app.Stop() })
+	menuList.SetBorder(true).SetTitle(" МЕНЮ ")
+
+	chatView = tview.NewTextView().SetDynamicColors(true).SetWordWrap(true)
+	chatView.SetBorder(true).SetTitle(" ЧАТ ")
+
+	inputField := tview.NewInputField().SetLabel("> ")
+	inputField.SetDoneFunc(func(key tcell.Key) {
+		if key == tcell.KeyEnter {
+			msg, _ := json.Marshal(Message{Author: hero.Name, Text: inputField.GetText()})
+			go http.Post(serverURL+"/chat", "application/json", bytes.NewBuffer(msg))
+			inputField.SetText("")
+		}
+	})
+	inputField.SetBorder(true).SetTitle(" СООБЩЕНИЕ ")
+
+	playersList = tview.NewTextView().SetDynamicColors(true)
+	playersList.SetBorder(true).SetTitle(" ОНЛАЙН ")
+
+	mainLayout := tview.NewFlex().
+		AddItem(menuList, 20, 1, true).
+		AddItem(tview.NewFlex().SetDirection(tview.FlexRow).
+			AddItem(chatView, 0, 1, false).
+			AddItem(inputField, 3, 1, true), 0, 2, false).
+		AddItem(playersList, 20, 1, false)
+
+	pages.AddPage("menu", mainLayout, true, true)
+	go networkLoop()
+}
+
+func showPvPDialog() {
+	form := tview.NewForm().
+		AddInputField("Ник цели", "", 20, nil, nil)
+	form.AddButton("УДАРИТЬ!", func() {
+		target := form.GetFormItem(0).(*tview.InputField).GetText()
+		pvpAttack(target)
+		pages.SwitchToPage("menu")
+	}).AddButton("Отмена", func() { pages.SwitchToPage("menu") })
+	
+	form.SetBorder(true).SetTitle(" PvP АТАКА ")
+	pages.AddPage("pvp", form, true, true)
+	pages.SwitchToPage("pvp")
+}
+
+func startBattle() {
+	mHP := 50
+	battleInfo := tview.NewTextView().SetDynamicColors(true)
+	battleList := tview.NewList().
+		AddItem("УДАР", "", 'a', func() {
+			mHP -= hero.Strength
+			hero.HP -= 5
+			battleInfo.SetText(fmt.Sprintf("[red]Монстр HP: %d[-]\n[green]Ваше HP: %d[-]", mHP, hero.HP))
+			if mHP <= 0 || hero.HP <= 0 { pages.SwitchToPage("menu") }
+		}).
+		AddItem("Сбежать", "", 'e', func() { pages.SwitchToPage("menu") })
+	
+	layout := tview.NewFlex().SetDirection(tview.FlexRow).
+		AddItem(battleInfo, 0, 1, false).
+		AddItem(battleList, 10, 1, true)
+	pages.AddPage("battle", layout, true, true)
+	pages.SwitchToPage("battle")
 }
 
 func main() {
 	rand.Seed(time.Now().UnixNano())
-	app = tview.NewApplication().EnableMouse(true)
+	app = tview.NewApplication()
 	pages = tview.NewPages()
-
-	// МАКСИМАЛЬНО ПРОСТОЕ ПОЛЕ
-	inputName := tview.NewInputField().
-		SetLabel("ИМЯ ГЕРОЯ: ").
-		SetText("Ficus")
-
-	inputName.SetDoneFunc(func(key tcell.Key) {
-		if key == tcell.KeyEnter {
-			name := inputName.GetText()
-			if name == "" { name = "Hero" }
-			hero = Player{Name: name, HP: 100}
-			showGame()
-			pages.SwitchToPage("game")
-		}
-	})
-	inputName.SetBorder(true).SetTitle(" ВВЕДИТЕ ИМЯ И НАЖМИТЕ ENTER ")
-
-	pages.AddPage("login", inputName, true, true) // Никаких флексов, только поле на весь экран
-
-	// Принудительный фокус на поле ввода при старте
-	app.SetRoot(pages, true).SetFocus(inputName) 
-
-	if err := app.SetRoot(pages, true).Run(); err != nil { panic(err) }
-}
-
-func showGame() {
-	chatBox = tview.NewTextView().SetDynamicColors(true).SetWordWrap(true)
-	chatBox.SetBorder(true).SetTitle(" ЧАТ (/slap имя - ударить) ")
 	
-	worldBox = tview.NewTextView().SetDynamicColors(true)
-	worldBox.SetBorder(true).SetTitle(" МИР ")
-
-	input := tview.NewInputField().SetLabel("Сообщение: ")
-	input.SetDoneFunc(func(key tcell.Key) {
-		if key == tcell.KeyEnter {
-			sendMessage(input.GetText())
-			input.SetText("")
-		}
+	f := tview.NewForm().AddInputField("Ник", "ficus", 20, nil, nil)
+	f.AddButton("СТАРТ", func() {
+		name := f.GetFormItem(0).(*tview.InputField).GetText()
+		hero = Character{Name: name, HP: 100, Strength: 10}
+		showMenu()
+		pages.SwitchToPage("menu")
 	})
-
-	layout := tview.NewFlex().
-		AddItem(tview.NewFlex().SetDirection(tview.FlexRow).
-			AddItem(chatBox, 0, 1, false).
-			AddItem(input, 3, 1, true), 0, 2, true).
-		AddItem(worldBox, 20, 1, false)
-
-	pages.AddPage("game", layout, true, true)
-	app.SetFocus(input) // Фокус на чат после входа
-	go networkLoop()
+	pages.AddPage("init", f.SetBorder(true).SetTitle(" ВХОД "), true, true)
+	app.SetRoot(pages, true).Run()
 }
