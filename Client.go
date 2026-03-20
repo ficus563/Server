@@ -26,7 +26,7 @@ type Message struct {
 
 type GameState struct {
 	Players  map[string]Player `json:"players"`
-	Messages []Message         `json:"messages"`
+	Messages []Message            `json:"messages"`
 }
 
 var (
@@ -35,7 +35,7 @@ var (
 	pages     *tview.Pages
 	chatBox   *tview.TextView
 	worldBox  *tview.TextView
-	serverURL = "http://localhost:8080" // Для Codespaces внутри одного контейнера
+	serverURL = "http://localhost:8080" 
 )
 
 func networkLoop() {
@@ -44,25 +44,24 @@ func networkLoop() {
 		resp, err := http.Post(serverURL+"/sync", "application/json", bytes.NewBuffer(data))
 		if err == nil {
 			var gs GameState
-			json.NewDecoder(resp.Body).Decode(&gs)
-			app.QueueUpdateDraw(func() {
-				// Обновление чата
-				chatBox.Clear()
-				for _, m := range gs.Messages {
-					fmt.Fprintf(chatBox, "[gray]%s[-] [blue]%s:[-] %s\n", m.Time, m.Author, m.Text)
-				}
-				chatBox.ScrollToEnd()
-				// Обновление мира и HP других
-				worldBox.Clear()
-				fmt.Fprintln(worldBox, "[yellow]ИГРОКИ:[-]")
-				for name, p := range gs.Players {
-					if name == hero.Name { 
-						hero.HP = p.HP // Синхронизируем наше HP, если нас ударили
-						continue 
+			if err := json.NewDecoder(resp.Body).Decode(&gs); err == nil {
+				app.QueueUpdateDraw(func() {
+					chatBox.Clear()
+					for _, m := range gs.Messages {
+						fmt.Fprintf(chatBox, "[gray]%s[-] [blue]%s:[-] %s\n", m.Time, m.Author, m.Text)
 					}
-					fmt.Fprintf(worldBox, "• %s (HP: %d)\n", name, p.HP)
-				}
-			})
+					chatBox.ScrollToEnd()
+
+					worldBox.Clear()
+					fmt.Fprintln(worldBox, "[yellow]ИГРОКИ:[-]")
+					for name, p := range gs.Players {
+						if name == hero.Name { 
+							hero.HP = p.HP 
+						}
+						fmt.Fprintf(worldBox, "• %s (HP: %d)\n", name, p.HP)
+					}
+				})
+			}
 			resp.Body.Close()
 		}
 		time.Sleep(1 * time.Second)
@@ -84,29 +83,41 @@ func sendMessage(text string) {
 
 func main() {
 	rand.Seed(time.Now().UnixNano())
-	app = tview.NewApplication()
+	app = tview.NewApplication().EnableMouse(true)
 	pages = tview.NewPages()
 
-	// Экран входа
-	form := tview.NewForm().AddInputField("Имя", "Ficus", 20, nil, nil)
-	form.AddButton("Войти", func() {
-		hero = Player{Name: form.GetFormItem(0).(*tview.InputField).GetText(), HP: 100}
-		showGame()
-		pages.SwitchToPage("game")
+	// МАКСИМАЛЬНО ПРОСТОЕ ПОЛЕ
+	inputName := tview.NewInputField().
+		SetLabel("ИМЯ ГЕРОЯ: ").
+		SetText("Ficus")
+
+	inputName.SetDoneFunc(func(key tcell.Key) {
+		if key == tcell.KeyEnter {
+			name := inputName.GetText()
+			if name == "" { name = "Hero" }
+			hero = Player{Name: name, HP: 100}
+			showGame()
+			pages.SwitchToPage("game")
+		}
 	})
-	pages.AddPage("login", form.SetBorder(true).SetTitle(" ВХОД "), true, true)
+	inputName.SetBorder(true).SetTitle(" ВВЕДИТЕ ИМЯ И НАЖМИТЕ ENTER ")
+
+	pages.AddPage("login", inputName, true, true) // Никаких флексов, только поле на весь экран
+
+	// Принудительный фокус на поле ввода при старте
+	app.SetRoot(pages, true).SetFocus(inputName) 
 
 	if err := app.SetRoot(pages, true).Run(); err != nil { panic(err) }
 }
 
 func showGame() {
 	chatBox = tview.NewTextView().SetDynamicColors(true).SetWordWrap(true)
-	chatBox.SetBorder(true).SetTitle(" ЧАТ (/slap имя для атаки) ")
+	chatBox.SetBorder(true).SetTitle(" ЧАТ (/slap имя - ударить) ")
 	
 	worldBox = tview.NewTextView().SetDynamicColors(true)
 	worldBox.SetBorder(true).SetTitle(" МИР ")
 
-	input := tview.NewInputField().SetLabel("> ")
+	input := tview.NewInputField().SetLabel("Сообщение: ")
 	input.SetDoneFunc(func(key tcell.Key) {
 		if key == tcell.KeyEnter {
 			sendMessage(input.GetText())
@@ -121,5 +132,6 @@ func showGame() {
 		AddItem(worldBox, 20, 1, false)
 
 	pages.AddPage("game", layout, true, true)
+	app.SetFocus(input) // Фокус на чат после входа
 	go networkLoop()
 }
