@@ -6,31 +6,16 @@ import (
 	"fmt"
 	"math/rand"
 	"net/http"
+	"strings"
 	"time"
 
-	"github.com/gdamore/tcell/v2" // Добавили для работы с клавишами
+	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 )
 
-// --- СТРУКТУРЫ ДАННЫХ ---
-
-type Item struct {
-	Name  string
-	Type  string
-	Value int
-}
-
-type Character struct {
-	Name      string           `json:"name"`
-	HP        int              `json:"hp"`
-	MaxHP     int              `json:"max_hp"`
-	Level     int              `json:"level"`
-	Money     int              `json:"money"`
-	Exp       int              `json:"exp"`
-	Strength  int              `json:"strength"`
-	Armor     int              `json:"armor"`
-	Inventory []Item           `json:"-"`
-	Equipped  map[string]*Item `json:"-"`
+type Player struct {
+	Name string `json:"name"`
+	HP   int    `json:"hp"`
 }
 
 type Message struct {
@@ -40,38 +25,18 @@ type Message struct {
 }
 
 type GameState struct {
-	Players  map[string]Character `json:"players"`
-	Messages []Message            `json:"messages"`
+	Players  map[string]Player `json:"players"`
+	Messages []Message         `json:"messages"`
 }
-
-// --- ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ---
 
 var (
-	hero        Character
-	app         *tview.Application
-	pages       *tview.Pages
-	chatView    *tview.TextView
-	playersList *tview.TextView
-	// URL очищен от лишнего слэша в конце
-	serverURL = "https://orange-waddle-v6q56qx6qg6q3x6g9-8080.app.github.dev" 
+	hero      Player
+	app       *tview.Application
+	pages     *tview.Pages
+	chatBox   *tview.TextView
+	worldBox  *tview.TextView
+	serverURL = "http://localhost:8080" // Для Codespaces внутри одного контейнера
 )
-
-func initHero(name string) {
-	hero = Character{
-		Name:     name,
-		HP:       100,
-		MaxHP:    100,
-		Level:    1,
-		Strength: 10,
-		Money:    100,
-		Inventory: []Item{
-			{Name: "Ржавый меч", Type: "Weapon", Value: 5},
-			{Name: "Зелье жизни", Type: "Potion", Value: 30},
-		},
-	}
-}
-
-// --- СЕТЕВАЯ ЛОГИКА ---
 
 func networkLoop() {
 	for {
@@ -79,11 +44,25 @@ func networkLoop() {
 		resp, err := http.Post(serverURL+"/sync", "application/json", bytes.NewBuffer(data))
 		if err == nil {
 			var gs GameState
-			if err := json.NewDecoder(resp.Body).Decode(&gs); err == nil {
-				app.QueueUpdateDraw(func() {
-					updateUI(gs)
-				})
-			}
+			json.NewDecoder(resp.Body).Decode(&gs)
+			app.QueueUpdateDraw(func() {
+				// Обновление чата
+				chatBox.Clear()
+				for _, m := range gs.Messages {
+					fmt.Fprintf(chatBox, "[gray]%s[-] [blue]%s:[-] %s\n", m.Time, m.Author, m.Text)
+				}
+				chatBox.ScrollToEnd()
+				// Обновление мира и HP других
+				worldBox.Clear()
+				fmt.Fprintln(worldBox, "[yellow]ИГРОКИ:[-]")
+				for name, p := range gs.Players {
+					if name == hero.Name { 
+						hero.HP = p.HP // Синхронизируем наше HP, если нас ударили
+						continue 
+					}
+					fmt.Fprintf(worldBox, "• %s (HP: %d)\n", name, p.HP)
+				}
+			})
 			resp.Body.Close()
 		}
 		time.Sleep(1 * time.Second)
@@ -92,135 +71,55 @@ func networkLoop() {
 
 func sendMessage(text string) {
 	if text == "" { return }
-	msg := Message{Author: hero.Name, Text: text}
-	data, _ := json.Marshal(msg)
-	go http.Post(serverURL+"/chat", "application/json", bytes.NewBuffer(data))
-}
-
-func updateUI(gs GameState) {
-	playersList.Clear()
-	fmt.Fprintln(playersList, "[yellow]ИГРОКИ ОНЛАЙН:[-]")
-	for _, p := range gs.Players {
-		color := "white"
-		if p.Name == hero.Name { color = "green" }
-		fmt.Fprintf(playersList, "[%s]• %s (HP: %d)[-]\n", color, p.Name, p.HP)
+	if strings.HasPrefix(text, "/slap ") {
+		target := strings.TrimPrefix(text, "/slap ")
+		dmg := 10 + rand.Intn(10)
+		payload, _ := json.Marshal(map[string]interface{}{"Target": target, "Damage": dmg, "Attacker": hero.Name})
+		go http.Post(serverURL+"/attack", "application/json", bytes.NewBuffer(payload))
+		return
 	}
-
-	chatView.Clear()
-	for _, m := range gs.Messages {
-		fmt.Fprintf(chatView, "[gray]%s[-] [blue]%s:[-] %s\n", m.Time, m.Author, m.Text)
-	}
-}
-
-// --- ИНТЕРФЕЙС ---
-
-func drawStats() *tview.TextView {
-	view := tview.NewTextView().SetDynamicColors(true)
-	go func() {
-		for {
-			app.QueueUpdateDraw(func() {
-				view.Clear()
-				fmt.Fprintf(view, "\n [yellow]ГЕРОЙ:[-] %s\n", hero.Name)
-				fmt.Fprintf(view, " [red]HP:[-] %d/%d\n", hero.HP, hero.MaxHP)
-				fmt.Fprintf(view, " [green]LVL:[-] %d\n", hero.Level)
-				fmt.Fprintf(view, " [blue]GOLD:[-] %d\n", hero.Money)
-			})
-			time.Sleep(1 * time.Second)
-		}
-	}()
-	view.SetBorder(true).SetTitle(" СТАТУС ")
-	return view
-}
-
-func showMenu() {
-	menuList := tview.NewList().
-		AddItem("В лес (PvE)", "Бой с мобом", '1', func() { startBattle() }).
-		AddItem("Выход", "", 'q', func() { app.Stop() })
-	menuList.SetBorder(true).SetTitle(" ДЕЙСТВИЯ ")
-
-	chatView = tview.NewTextView().SetDynamicColors(true).SetWordWrap(true)
-	chatView.SetBorder(true).SetTitle(" ОБЩИЙ ЧАТ ")
-
-	inputField := tview.NewInputField().SetLabel("> ").SetFieldWidth(0)
-	// Исправлено использование tcell.KeyEnter
-	inputField.SetDoneFunc(func(key tcell.Key) {
-		if key == tcell.KeyEnter {
-			sendMessage(inputField.GetText())
-			inputField.SetText("")
-		}
-	})
-	inputField.SetBorder(true).SetTitle(" СООБЩЕНИЕ (Enter) ")
-
-	playersList = tview.NewTextView().SetDynamicColors(true)
-	playersList.SetBorder(true).SetTitle(" МИР ")
-
-	chatFlex := tview.NewFlex().SetDirection(tview.FlexRow).
-		AddItem(chatView, 0, 1, false).
-		AddItem(inputField, 3, 1, true)
-
-	mainFlex := tview.NewFlex().
-		AddItem(menuList, 20, 1, true).
-		AddItem(chatFlex, 0, 2, false).
-		AddItem(tview.NewFlex().SetDirection(tview.FlexRow).
-			AddItem(drawStats(), 10, 1, false).
-			AddItem(playersList, 0, 1, false), 25, 1, false)
-
-	pages.AddPage("menu", mainFlex, true, true)
-	go networkLoop()
-}
-
-func startBattle() {
-	mHP := 50
-	battleInfo := tview.NewTextView().SetDynamicColors(true)
-	fmt.Fprintf(battleInfo, "[red]Враг: Дикий Орк (HP: %d)[-]\n", mHP)
-
-	battleList := tview.NewList().
-		AddItem("Атака", "", 'a', func() {
-			dmg := hero.Strength + rand.Intn(5)
-			mHP -= dmg
-			hero.HP -= rand.Intn(10)
-			battleInfo.Clear()
-			fmt.Fprintf(battleInfo, "[red]Враг: Орк (HP: %d)[-]\nВы ударили на [yellow]%d[-]!\n", mHP, dmg)
-			if mHP <= 0 {
-				hero.Exp += 20
-				hero.Money += 10
-				pages.SwitchToPage("menu")
-			}
-			if hero.HP <= 0 {
-				hero.HP = 100 // Респаун
-				pages.SwitchToPage("menu")
-			}
-		}).
-		AddItem("Сбежать", "", 'e', func() { pages.SwitchToPage("menu") })
-
-	layout := tview.NewFlex().SetDirection(tview.FlexRow).
-		AddItem(battleInfo, 0, 1, false).
-		AddItem(battleList, 10, 1, true)
-	
-	layout.SetBorder(true).SetTitle(" БОЙ ")
-	pages.AddPage("battle", layout, true, true)
+	msg, _ := json.Marshal(Message{Author: hero.Name, Text: text})
+	go http.Post(serverURL+"/chat", "application/json", bytes.NewBuffer(msg))
 }
 
 func main() {
 	rand.Seed(time.Now().UnixNano())
-	app = tview.NewApplication().EnableMouse(true)
+	app = tview.NewApplication()
 	pages = tview.NewPages()
 
-	form := tview.NewForm()
-	form.AddInputField("Имя героя", "Странник", 20, nil, nil)
+	// Экран входа
+	form := tview.NewForm().AddInputField("Имя", "Ficus", 20, nil, nil)
 	form.AddButton("Войти", func() {
-		// Исправленный способ получения текста из InputField
-		name := form.GetFormItem(0).(*tview.InputField).GetText()
-		if name == "" { name = "Странник" }
-		initHero(name)
-		showMenu()
-		pages.SwitchToPage("menu")
+		hero = Player{Name: form.GetFormItem(0).(*tview.InputField).GetText(), HP: 100}
+		showGame()
+		pages.SwitchToPage("game")
 	})
-	
-	form.SetBorder(true).SetTitle(" РЕГИСТРАЦИЯ ")
-	pages.AddPage("init", form, true, true)
+	pages.AddPage("login", form.SetBorder(true).SetTitle(" ВХОД "), true, true)
 
-	if err := app.SetRoot(pages, true).Run(); err != nil {
-		panic(err)
-	}
+	if err := app.SetRoot(pages, true).Run(); err != nil { panic(err) }
+}
+
+func showGame() {
+	chatBox = tview.NewTextView().SetDynamicColors(true).SetWordWrap(true)
+	chatBox.SetBorder(true).SetTitle(" ЧАТ (/slap имя для атаки) ")
+	
+	worldBox = tview.NewTextView().SetDynamicColors(true)
+	worldBox.SetBorder(true).SetTitle(" МИР ")
+
+	input := tview.NewInputField().SetLabel("> ")
+	input.SetDoneFunc(func(key tcell.Key) {
+		if key == tcell.KeyEnter {
+			sendMessage(input.GetText())
+			input.SetText("")
+		}
+	})
+
+	layout := tview.NewFlex().
+		AddItem(tview.NewFlex().SetDirection(tview.FlexRow).
+			AddItem(chatBox, 0, 1, false).
+			AddItem(input, 3, 1, true), 0, 2, true).
+		AddItem(worldBox, 20, 1, false)
+
+	pages.AddPage("game", layout, true, true)
+	go networkLoop()
 }
