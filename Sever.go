@@ -9,68 +9,93 @@ import (
 )
 
 type Player struct {
-	Name     string `json:"name"`
-	HP       int    `json:"hp"`
-	Strength int    `json:"strength"`
-}
-
-type Message struct {
-	Author string `json:"author"`
-	Text   string `json:"text"`
-	Time   string `json:"time"`
+	Name string `json:"name"`; HP int `json:"hp"`; MaxHP int `json:"mhp"`
+	Str int `json:"str"`; Def int `json:"def"`; Coins int `json:"coins"`
+	LastSeen time.Time `json:"-"`
 }
 
 type GameState struct {
-	Players  map[string]Player `json:"players"`
-	Messages []Message         `json:"messages"`
+	Players map[string]Player `json:"players"`
+	Msgs    []struct{ A, T, Time string } `json:"msgs"`
 }
 
 var (
-	state = GameState{Players: make(map[string]Player), Messages: []Message{}}
+	state = GameState{Players: make(map[string]Player)}
 	mu    sync.Mutex
 )
 
 func main() {
+	// Очистка мертвых душ (кто вышел)
+	go func() {
+		for {
+			time.Sleep(2 * time.Second)
+			mu.Lock()
+			for name, p := range state.Players {
+				if time.Since(p.LastSeen) > 5*time.Second {
+					delete(state.Players, name)
+				}
+			}
+			mu.Unlock()
+		}
+	}()
+
 	http.HandleFunc("/sync", func(w http.ResponseWriter, r *http.Request) {
 		var p Player
 		if err := json.NewDecoder(r.Body).Decode(&p); err == nil {
 			mu.Lock()
-			if _, ok := state.Players[p.Name]; !ok { p.HP = 100 } // Респаун
-			state.Players[p.Name] = p
+			curr, exists := state.Players[p.Name]
+			if !exists {
+				p.HP, p.MaxHP, p.Str, p.Def, p.Coins = 100, 100, 15, 5, 100
+				state.Players[p.Name] = p
+			} else {
+				curr.LastSeen = time.Now()
+				state.Players[p.Name] = curr
+			}
 			json.NewEncoder(w).Encode(state)
 			mu.Unlock()
 		}
 	})
 
-	http.HandleFunc("/chat", func(w http.ResponseWriter, r *http.Request) {
-		var m Message
-		if err := json.NewDecoder(r.Body).Decode(&m); err == nil {
-			m.Time = time.Now().Format("15:04")
-			mu.Lock()
-			state.Messages = append(state.Messages, m)
-			if len(state.Messages) > 15 { state.Messages = state.Messages[1:] }
-			mu.Unlock()
-		}
-	})
+	http.HandleFunc("/action", func(w http.ResponseWriter, r *http.Request) {
+		var req struct { Type, From, To string; Val int; AtkZone, BlkZone int }
+		json.NewDecoder(r.Body).Decode(&req)
+		mu.Lock()
+		defer mu.Unlock()
 
-	http.HandleFunc("/attack", func(w http.ResponseWriter, r *http.Request) {
-		var req struct { Target string; Damage int; Attacker string }
-		if err := json.NewDecoder(r.Body).Decode(&req); err == nil {
-			mu.Lock()
-			if t, ok := state.Players[req.Target]; ok {
-				t.HP -= req.Damage
-				if t.HP < 0 { t.HP = 0 }
-				state.Players[req.Target] = t
-				state.Messages = append(state.Messages, Message{
-					Author: "БОЙ",
-					Text:   fmt.Sprintf("%s жахнул %s на %d HP!", req.Attacker, req.Target, req.Damage),
-					Time:   time.Now().Format("15:04"),
-				})
+		p := state.Players[req.From]
+		switch req.Type {
+		case "chat": addMsg(req.From, req.To)
+		case "pve":
+			p.HP -= req.Val
+			p.Coins += 40
+			if p.HP < 0 { p.HP = 0 }
+			state.Players[req.From] = p
+		case "pvp":
+			if t, ok := state.Players[req.To]; ok {
+				dmg := 0
+				if req.AtkZone != req.BlkZone { // Если не заблочил
+					dmg = p.Str - t.Def
+					if dmg < 10 { dmg = 10 }
+					t.HP -= dmg
+					if t.HP < 0 { t.HP = 0 }
+					state.Players[req.To] = t
+					addMsg("БОЙ", fmt.Sprintf("%s пробил %s! -%d HP", req.From, req.To, dmg))
+				} else {
+					addMsg("БОЙ", fmt.Sprintf("%s заблокировал удар %s!", req.To, req.From))
+				}
 			}
-			mu.Unlock()
+		case "shop":
+			switch req.To {
+			case "sword": if p.Coins >= 100 { p.Coins -= 100; p.Str += 20 }
+			case "armor": if p.Coins >= 80 { p.Coins -= 80; p.Def += 15 }
+			case "heal":  if p.Coins >= 30 { p.Coins -= 30; p.HP = p.MaxHP }
+			}
+			state.Players[req.From] = p
 		}
 	})
+	fmt.Println("СЕРВЕР ОБНОВЛЕН (Port 8080)"); http.ListenAndServe(":8080", nil)
+}
 
-	fmt.Println("Сервер летит на :8080")
-	http.ListenAndServe(":8080", nil)
+func addMsg(a, t string) {
+	state.Msgs = append(state.Msgs, struct{ A, T, Time string }{a, t, time.Now().Format("15:04")})
 }
