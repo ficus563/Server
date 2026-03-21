@@ -8,6 +8,10 @@ import (
 	"time"
 )
 
+type Attack struct {
+	From string; Zone int; Damage int
+}
+
 type Player struct {
 	Name string `json:"name"`; HP int `json:"hp"`; MaxHP int `json:"mhp"`
 	Str int `json:"str"`; Def int `json:"def"`; Coins int `json:"coins"`
@@ -21,19 +25,17 @@ type GameState struct {
 
 var (
 	state = GameState{Players: make(map[string]Player)}
+	pendingAttacks = make(map[string]Attack) // Кого бьют -> Информация об атаке
 	mu    sync.Mutex
 )
 
 func main() {
-	// Очистка мертвых душ (кто вышел)
 	go func() {
 		for {
 			time.Sleep(2 * time.Second)
 			mu.Lock()
 			for name, p := range state.Players {
-				if time.Since(p.LastSeen) > 5*time.Second {
-					delete(state.Players, name)
-				}
+				if time.Since(p.LastSeen) > 10*time.Second { delete(state.Players, name) }
 			}
 			mu.Unlock()
 		}
@@ -41,23 +43,22 @@ func main() {
 
 	http.HandleFunc("/sync", func(w http.ResponseWriter, r *http.Request) {
 		var p Player
-		if err := json.NewDecoder(r.Body).Decode(&p); err == nil {
-			mu.Lock()
-			curr, exists := state.Players[p.Name]
-			if !exists {
-				p.HP, p.MaxHP, p.Str, p.Def, p.Coins = 100, 100, 15, 5, 100
-				state.Players[p.Name] = p
-			} else {
-				curr.LastSeen = time.Now()
-				state.Players[p.Name] = curr
-			}
-			json.NewEncoder(w).Encode(state)
-			mu.Unlock()
+		json.NewDecoder(r.Body).Decode(&p)
+		mu.Lock()
+		defer mu.Unlock()
+		
+		if curr, ok := state.Players[p.Name]; !ok {
+			p.HP, p.MaxHP, p.Str, p.Def, p.Coins = 100, 100, 15, 5, 100
+			state.Players[p.Name] = p
+		} else {
+			curr.LastSeen = time.Now()
+			state.Players[p.Name] = curr
 		}
+		json.NewEncoder(w).Encode(state)
 	})
 
 	http.HandleFunc("/action", func(w http.ResponseWriter, r *http.Request) {
-		var req struct { Type, From, To string; Val int; AtkZone, BlkZone int }
+		var req struct { Type, From, To string; Val, AtkZone, BlkZone int }
 		json.NewDecoder(r.Body).Decode(&req)
 		mu.Lock()
 		defer mu.Unlock()
@@ -66,34 +67,35 @@ func main() {
 		switch req.Type {
 		case "chat": addMsg(req.From, req.To)
 		case "pve":
-			p.HP -= req.Val
-			p.Coins += 40
+			p.HP -= 10; p.Coins += 30
 			if p.HP < 0 { p.HP = 0 }
 			state.Players[req.From] = p
-		case "pvp":
-			if t, ok := state.Players[req.To]; ok {
-				dmg := 0
-				if req.AtkZone != req.BlkZone { // Если не заблочил
-					dmg = p.Str - t.Def
-					if dmg < 10 { dmg = 10 }
-					t.HP -= dmg
-					if t.HP < 0 { t.HP = 0 }
-					state.Players[req.To] = t
-					addMsg("БОЙ", fmt.Sprintf("%s пробил %s! -%d HP", req.From, req.To, dmg))
-				} else {
-					addMsg("БОЙ", fmt.Sprintf("%s заблокировал удар %s!", req.To, req.From))
-				}
-			}
+			// Проверка: не били ли нас, пока мы гуляли по лесу?
+			checkIncoming(&p, req.BlkZone)
+		case "pvp_init":
+			pendingAttacks[req.To] = Attack{From: req.From, Zone: req.AtkZone, Damage: p.Str}
+			addMsg("СИСТЕМА", fmt.Sprintf("%s замахнулся на %s!", req.From, req.To))
 		case "shop":
-			switch req.To {
-			case "sword": if p.Coins >= 100 { p.Coins -= 100; p.Str += 20 }
-			case "armor": if p.Coins >= 80 { p.Coins -= 80; p.Def += 15 }
-			case "heal":  if p.Coins >= 30 { p.Coins -= 30; p.HP = p.MaxHP }
-			}
+			if req.To == "sword" && p.Coins >= 100 { p.Coins -= 100; p.Str += 20 }
+			if req.To == "heal" && p.Coins >= 30 { p.Coins -= 30; p.HP = p.MaxHP }
 			state.Players[req.From] = p
 		}
 	})
-	fmt.Println("СЕРВЕР ОБНОВЛЕН (Port 8080)"); http.ListenAndServe(":8080", nil)
+	http.ListenAndServe(":8080", nil)
+}
+
+func checkIncoming(p *Player, blkZone int) {
+	if atk, ok := pendingAttacks[p.Name]; ok {
+		if atk.Zone != blkZone {
+			dmg := atk.Damage - p.Def
+			if dmg < 10 { dmg = 10 }
+			p.HP -= dmg
+			addMsg("БОЙ", fmt.Sprintf("%s получил урон от %s (не угадал блок)!", p.Name, atk.From))
+		} else {
+			addMsg("БОЙ", fmt.Sprintf("%s заблокировал удар %s!", p.Name, atk.From))
+		}
+		delete(pendingAttacks, p.Name)
+	}
 }
 
 func addMsg(a, t string) {
