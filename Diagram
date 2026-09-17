@@ -1,0 +1,154 @@
+Первая диаграмма:
+@startuml
+left to right direction
+skinparam packageStyle rectangle
+
+actor "Соискатель" as Candidate
+actor "Работодатель" as Employer
+actor "Рекрутер" as Recruiter
+actor "Администратор" as Admin
+
+rectangle "ИС Кадровое агентство" {
+  usecase "Регистрация / Авторизация" as UC_Auth
+  
+  usecase "Создание / редактирование резюме" as UC_Resume
+  usecase "Поиск вакансий" as UC_SearchJobs
+  usecase "Отклик на вакансию" as UC_Apply
+  
+  usecase "Публикация вакансии" as UC_PostJob
+  usecase "Просмотр откликов" as UC_ViewApp
+  usecase "Приглашение на собеседование" as UC_Invite
+  
+  usecase "Модерация объявление/резюме" as UC_Moderate
+  usecase "Автоматический подбор кандидатов" as UC_Match
+  usecase "Формирование отчетов" as UC_Reports
+  
+  usecase "Управление пользователями" as UC_UserMgmt
+}
+
+Candidate --> UC_Auth
+Candidate --> UC_Resume
+Candidate --> UC_SearchJobs
+Candidate --> UC_Apply
+
+Employer --> UC_Auth
+Employer --> UC_PostJob
+Employer --> UC_ViewApp
+Employer --> UC_Invite
+
+Recruiter --> UC_Auth
+Recruiter --> UC_Moderate
+Recruiter --> UC_Match
+Recruiter --> UC_Reports
+
+Admin --> UC_UserMgmt
+
+UC_Apply ..> UC_Auth : <<include>>
+UC_PostJob ..> UC_Auth : <<include>>
+UC_Invite ..> UC_ViewApp : <<extend>>
+@enduml
+
+Вторая 
+
+@startuml
+package "Client Tier" {
+  [Web SPA / Mobile App] as ClientUI
+}
+
+package "Application Tier (Backend API)" {
+  [Auth Controller] as AuthCtrl
+  [Vacancy Controller] as VacancyCtrl
+  [Resume Controller] as ResumeCtrl
+  [Matching Engine] as MatchEngine
+  [Notification Controller] as NotifCtrl
+}
+
+package "Data Tier" {
+  database "Relational Database\n(PostgreSQL)" as DB
+}
+
+package "External Services" {
+  [Email Service (SMTP)] as EmailSvc
+  [File Cloud Storage] as CloudStore
+}
+
+ClientUI ..> AuthCtrl : HTTP / REST
+ClientUI ..> VacancyCtrl : HTTP / REST
+ClientUI ..> ResumeCtrl : HTTP / REST
+
+VacancyCtrl --> DB
+ResumeCtrl --> DB
+AuthCtrl --> DB
+MatchEngine --> DB : Чтение данных
+
+ResumeCtrl --> CloudStore : Загрузка резюме (PDF)
+NotifCtrl --> EmailSvc : Отправка писем
+VacancyCtrl ..> NotifCtrl : Вызов событий
+@enduml
+
+Третья 
+
+@startuml
+class User {
+  + Long id
+  + String email
+  + String passwordHash
+  + UserRole role
+  + register()
+  + login()
+}
+
+class CandidateProfile {
+  + String firstName
+  + String lastName
+  + String phone
+  + List<String> skills
+}
+
+class EmployerProfile {
+  + String companyName
+  + String description
+  + String website
+}
+
+class Resume {
+  + Long id
+  + String title
+  + Double desiredSalary
+  + String experience
+  + Boolean isPublic
+  + update()
+}
+
+class Vacancy {
+  + Long id
+  + String title
+  + String requirements
+  + Double salary
+  + Boolean isActive
+  + close()
+}
+
+class Application {
+  + Long id
+  + Date applyDate
+  + String status
+  + setStatus(status)
+}
+
+class Interview {
+  + Long id
+  + DateTime date
+  + String location
+  + String notes
+  + schedule()
+}
+
+User "1" -- "0..1" CandidateProfile : has
+User "1" -- "0..1" EmployerProfile : has
+CandidateProfile "1" -- "0..*" Resume : creates
+EmployerProfile "1" -- "0..*" Vacancy : posts
+Resume "1" -- "0..*" Application : subject of
+Vacancy "1" -- "0..*" Application : receives
+Application "1" -- "0..1" Interview : results in
+@enduml
