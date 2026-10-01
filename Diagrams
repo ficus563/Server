@@ -1,0 +1,116 @@
+stateDiagram-v2
+    state "Соискатель" as Applicant {
+        [*] --> FillResume : Начало
+        FillResume : Заполнение резюме и профиля
+        FillResume --> ApplyVacancy : Подача отклика на вакансию
+    }
+
+    state "Менеджер агентства" as Manager {
+        ApplyVacancy --> CheckResume : Резюме получено
+        CheckResume : Проверка резюме на соответствие
+        state is_valid <<choice>>
+        CheckResume --> is_valid
+        
+        is_valid --> RejectNotice : [Нет]
+        is_valid --> SendToEmployer : [Да]
+        
+        RejectNotice : Отправить уведомление об отказе
+        RejectNotice --> [*] : Конец
+        
+        SendToEmployer : Передать резюме работодателю
+    }
+
+    state "Работодатель" as Employer {
+        SendToEmployer --> ReviewCandidate : Рассмотрение кандидатуры
+        
+        state is_approved <<choice>>
+        ReviewCandidate --> is_approved
+        
+        is_approved --> RefuseCandidate : [Нет]
+        is_approved --> ScheduleInterview : [Да]
+        
+        RefuseCandidate : Зафиксировать отказ
+        RefuseCandidate --> RejectNotice
+        
+        ScheduleInterview : Назначить дату собеседования
+        ScheduleInterview --> ConductInterview : Провести собеседование
+        ConductInterview --> MakeOffer : Формирование оффера
+    }
+
+    MakeOffer --> CreateContract : Оффер принят
+    state "Менеджер агентства" as Manager2 {
+        CreateContract : Оформление договора и трудоустройства
+        CreateContract --> [*] : Конец
+    }
+
+------------
+-----------
+-----------
+stateDiagram-v2
+    [*] --> Draft : Создание отклика
+    Draft --> OnModeration : Отправка заявки
+    
+    OnModeration --> UnderReview : Одобрено менеджером
+    OnModeration --> Rejected : Не соответствует требованиям
+    
+    UnderReview --> InterviewScheduled : Приглашение на собеседование
+    UnderReview --> Rejected : Отказ работодателя
+    
+    InterviewScheduled --> OfferIssued : Успешное собеседование
+    InterviewScheduled --> Rejected : Не прошел собеседование
+    
+    OfferIssued --> Completed : Оффер принят соискателем
+    OfferIssued --> Rejected : Оффер отклонен
+    
+    Completed --> [*]
+    Rejected --> [*]
+
+    Draft : Черновик
+    OnModeration : На модерации у менеджера
+    UnderReview : На рассмотрении у работодателя
+    InterviewScheduled : Собеседование назначено
+    OfferIssued : Оффер выставлен
+    Completed : Успешно завершена (Трудоустроен)
+    Rejected : Отклонена
+
+---------
+---------
+---------
+
+sequenceDiagram
+    autonumber
+    actor Employer as Работодатель
+    participant UI as Интерфейс системы
+    participant Server as Сервер агентства
+    participant DB as База данных
+    actor Applicant as Соискатель
+
+    Employer->>UI: Выбрать отклик и нажать "Назначить собеседование"
+    UI->>Server: Передать данные (ID отклика, дата, время)
+    Server->>DB: Сохранить детали встречи и обновить статус
+    DB-->>Server: Подтверждение записи
+    Server->>Applicant: Отправить письмо/уведомление соискателю
+    Server-->>UI: Сообщение "Собеседование запланировано"
+    UI-->>Employer: Отобразить подтверждение на экране
+
+---------
+---------
+
+architecture-beta
+    group user_device(cloud)[Устройство пользователя]
+    service browser(internet)[Веб-браузер / Мобильное приложение] in user_device
+
+    group app_server(server)[Сервер приложений]
+    service vacancy_mod(app)[Модуль управления вакансиями] in app_server
+    service match_eng(app)[Сервис подбора кандидатов] in app_server
+    service auth_api(app)[API авторизации] in app_server
+
+    group db_server(database)[Сервер баз данных]
+    service db(database)[База данных PostgreSQL/MySQL] in db_server
+
+    group mail_server(server)[Почтовый сервер]
+    service mailer(net)[Сервис отправки уведомлений] in mail_server
+
+    browser:R -- L:auth_api
+    app_server:R -- L:db_server
+    app_server:B -- T:mail_server
