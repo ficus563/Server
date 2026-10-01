@@ -170,3 +170,22 @@ Offer --> Rejected
 Hired --> [*]
 Rejected --> [*]
 @enduml
+
+-----
+-----
+
+@startuml
+actor "Работодатель" as Emp
+participant "Интерфейс" as UI
+participant "Сервер" as Server
+database "База данных" as DB
+actor "Соискатель" as App
+
+Emp -> UI : Назначить собеседование
+UI -> Server : Данные встречи
+Server -> DB : Сохранить запись
+DB --> Server : ОК
+Server -> App : Уведомление
+Server --> UI : Подтверждение
+UI --> Emp : Успешно
+@enduml
