@@ -189,3 +189,28 @@ Server -> App : Уведомление
 Server --> UI : Подтверждение
 UI --> Emp : Успешно
 @enduml
+
+------
+------
+@startuml
+node "Устройство пользователя" {
+  component "Веб-браузер" as Browser
+}
+
+node "Сервер приложений" {
+  component "API Авторизации" as Auth
+  component "Модуль вакансий" as Vacancy
+}
+
+node "Сервер баз данных" {
+  database "PostgreSQL" as DB
+}
+
+node "Почтовый сервер" {
+  component "Сервис уведомлений" as Mail
+}
+
+Browser <--> Auth
+Vacancy <--> DB
+Vacancy <--> Mail
+@enduml
